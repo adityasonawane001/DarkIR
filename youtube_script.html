@@ -1,0 +1,110 @@
+<html><head><meta charset='utf-8'><style>body{font-family: sans-serif; line-height: 1.6; margin: 40px;} pre{background: #f4f4f4; padding: 10px; border-radius: 5px;}</style></head><body><h1>DarkIR Project - YouTube Video Demo Script (15 Minutes)</h1>
+<p><strong>Goal:</strong> ~10 minutes explaining the paper and your 4 novel contributions + ~5 minutes showcasing a live, working Gradio demo.
+<strong>Pro Tip for Recording:</strong> Screen-record using OBS Studio or Zoom. Keep the downloaded <code>DarkIR_Official_Paper.pdf</code> open in a PDF viewer where you can use a highlighter tool to physically mark the paper while you talk.</p>
+<hr />
+<h2>Part 1: Base Paper Explanation (0:00 - 5:00)</h2>
+<p><strong>[Visual on Screen]</strong> Open the <code>DarkIR_Official_Paper.pdf</code> to the Title and Abstract.</p>
+<p><strong>Speaker (Kumar, Aditya, or Roshan):</strong></p>
+<blockquote>
+<p>"Hello everyone, welcome to our Deep Learning course project presentation. Today we are presenting our work on <strong>DarkIR: Robust Low-Light Image Restoration</strong>. This paper was published very recently at CVPR. </p>
+<p>The core problem that this paper tackles is that when you take a photo in severely low-light environments, you don't just get a dark image—you get a coupled degradation of darkness, blur from shaky camera hands, and heavy sensor noise."</p>
+</blockquote>
+<p><strong>[Visual on Screen]</strong> Scroll down to the Introduction block and <strong>Highlight Equation 1</strong> ($y = \gamma(x \otimes k) + n$).</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"To understand the complexity, look at this formulation. Traditional methods try to fix these sequentially—first denoise, then brighten, then deblur. But as seen in Equation 1, the clean image $x$ is simultaneously blurred by $k$, altered by the camera response function $\gamma$, and corrupted by noise $n$. Trying to fix one without the others leads to artifacts. DarkIR proposes to solve them together using a dual-domain network."</p>
+</blockquote>
+<p><strong>[Visual on Screen]</strong> Scroll down to the <strong>Architecture Diagram (Figure 2)</strong> and highlight the two distinct paths (Spatial and Frequency).</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"The base DarkIR model avoids computationally expensive Transformers. Instead, it relies on an efficient CNN with two primary processing streams:
+1. A <strong>Spatial Domain Path</strong> using dilated convolutions to fix local corruptions like noise and blur.
+2. A <strong>Frequency Domain Path</strong> using Fast Fourier Transforms (FFTs) to capture global illumination and structural color adjustments.
+This makes the baseline incredibly fast and lightweight. However, during our reproduction, we found several areas where we could push the performance and stability even further."</p>
+</blockquote>
+<hr />
+<h2>Part 2: Our Novel Contributions (5:00 - 10:00)</h2>
+<p><strong>[Visual on Screen]</strong> Switch to your PPT presentation (specifically the <strong>Contributions flow diagram</strong> we generated in LaTeX).</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"While reproducing this architecture, we implemented four distinct novel contributions to improve visual quality and model learning."</p>
+</blockquote>
+<p><strong>Contribution 1: Phase-Aware Frequency Modulation</strong></p>
+<blockquote>
+<p>"Our first contribution is in the Frequency Path. The standard DarkIR primarily enhances the magnitude of the spectrum and leaves the phase mostly untouched. However, phase contains critical structural information. We introduced a completely new learnable phase-weighting branch."
+<strong>[Visual on Screen]</strong> Show a quick code snippet or mention: </p>
+</blockquote>
+<pre><code class="language-python"># Our Code Addition:
+phase = torch.atan2(imag, real + 1e-8)
+phase_weight = torch.sigmoid(self.phase_conv(phase))
+</code></pre>
+<blockquote>
+<p>"By explicitly mapping <code>torch.atan2</code> inside the custom layer, the network intentionally shifts phase geometry, leading to crisper edges."</p>
+</blockquote>
+<p><strong>Contribution 2: Content-Adaptive Receptive Fields</strong></p>
+<blockquote>
+<p>"Our second contribution targets the Spatial Path. The base paper hardcodes dilated convolutions. We implemented a dynamic spatial block using Global Pooling and Softmax."
+<strong>[Visual on Screen]</strong> Show snippet:</p>
+</blockquote>
+<pre><code class="language-python"># Our Code Addition:
+weights = F.softmax(self.routing_mlp(global_pool(x)), dim=1)
+out = w1*branch1 + w2*branch2 + w3*branch3
+</code></pre>
+<blockquote>
+<p>"Now, the model actively 'votes' via <code>F.softmax</code> on whether it needs to rely on local $3 \times 3$ patterns for noise, or wide $9 \times 9$ patterns to repair blurs, adapting on a per-image basis."</p>
+</blockquote>
+<p><strong>Contribution 3: Gated Channel Attention Matrix</strong></p>
+<blockquote>
+<p>"Third, we upgraded the feature gating mechanism from a simple element-wise multiplication to channel chunk-routing."
+<strong>[Visual on Screen]</strong> Show snippet:</p>
+</blockquote>
+<pre><code class="language-python"># Our Code Addition:
+x1, x2 = torch.chunk(x, 2, dim=1)
+gate = torch.sigmoid(self.attention_net(x1))
+out = torch.cat([x1, x2 * gate], dim=1)
+</code></pre>
+<blockquote>
+<p>"We split the channels using <code>torch.chunk</code>, learn an attention gate from the first half, and multiply it by the second. This selectively filters out noisy channels before reconstruction."</p>
+</blockquote>
+<p><strong>Contribution 4: Dual-Spectrum Frequency Loss</strong></p>
+<blockquote>
+<p>"Finally, we proposed a Novel Frequency Loss. Traditional training only penalizes L1 combinations at the pixel level. We wrote a custom loss function that enforces L1 consistency explicitly on the Amplitude and Phase maps."
+<strong>[Visual on Screen]</strong> Show snippet:</p>
+</blockquote>
+<pre><code class="language-python"># Our Code Addition:
+loss_freq = target_l1(mag_pred, mag_gt) + 0.1 * target_l1(phase_pred, phase_gt)
+</code></pre>
+<blockquote>
+<p>"By adding a specific <code>0.1 * phase_l1</code> weight, we forced the network to respect frequency structures. We also had to mathematically bound the phase mappings strictly to prevent NaNs on our GPU."</p>
+</blockquote>
+<hr />
+<h2>Part 3: Working Code Demo (10:00 - 15:00)</h2>
+<p><strong>[Visual on Screen]</strong> Switch to VS Code. Show the terminal and the <code>app_local.py</code> file.</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"For the final part of our presentation, we will demonstrate our model physically running on our local hardware. Because of our optimizations, we were able to deploy this on a standard Laptop RTX 3050.</p>
+<p>Here in VS Code, you can see our custom inference script <code>app_local.py</code>. It dynamically loads our trained Distributed Data Parallel checkpoints, handles high-resolution tensor downscaling automatically, and wraps everything into a Gradio Web UI."</p>
+</blockquote>
+<p><strong>[Action]</strong> Run <code>python app_local.py</code> in the terminal. Wait for the <code>http://127.0.0.1:7861</code> link to appear.</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"Our server is live on localhost. Let's open it in the browser."</p>
+</blockquote>
+<p><strong>[Visual on Screen]</strong> Open browser to the Gradio interface. </p>
+<p><strong>[Action]</strong> Drag and drop your extremely dark test image (<code>qualis_realblur_night.jpg</code> / <code>demo.jpg</code>) into the input box.</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"We are submitting a severely underexposed, noisy, and blurred image. The UI gives us a 'Visibility Boost' slider, which applies our custom non-linear gamma curve to help map the lowest light pixels properly before feeding it into the tensors.</p>
+<p>Let's hit submit."</p>
+</blockquote>
+<p><strong>[Action]</strong> Click Submit. Wait the ~2 seconds for it to process. </p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"As you can see, in under just a few seconds, the model perfectly reconstructs the lighting, stabilizes the color phase to avoid weird green/purple tints, and aggressively filters out the sensor noise without blurring the face. We successfully mapped the global illumination via the frequency domain and the local textures via our adaptive spatial dilations."</p>
+</blockquote>
+<p><strong>[Visual on Screen]</strong> Show the side-by-side comparison on Gradio.</p>
+<p><strong>Speaker:</strong></p>
+<blockquote>
+<p>"You can see the final inference logs here reflecting the exact device footprint. Our modifications improved structural integrity and allowed interactive, near real-time performance. </p>
+<p>Thank you for watching!"</p>
+</blockquote></body></html>

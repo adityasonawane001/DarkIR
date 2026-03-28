@@ -1,0 +1,218 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[a4paper,margin=0.7in]{geometry}
+\usepackage{times}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{blue},
+  commentstyle=\color{green!60!black},
+  stringstyle=\color{orange},
+  breaklines=true,
+  backgroundcolor=\color{black!5},
+  frame=single,
+  aboveskip=0.2cm,
+  belowskip=0.2cm
+}
+
+\setlength{\columnsep}{0.24in}
+\setlist[itemize]{leftmargin=*, topsep=2pt, itemsep=2pt}
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+
+\newcommand{\maybeimage}[3]{%
+  \IfFileExists{#1}{%
+    \includegraphics[width=#2\linewidth]{#1}
+  }{%
+    \fbox{\parbox[c][0.22\textheight][c]{#2\linewidth}{\centering
+      Placeholder for #3\\
+      Put image file at: #1
+    }}
+  }%
+}
+
+\title{DarkIR Project Report: Robust Low-Light Image Restoration\\
+\large Deep Learning CSL4020 Project Report}
+\author{Kumar Harsh (B23BB1025) \and Aditya Sonawane (B23BB1004) \and Roshan K (B23BB1037)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\textbf{GitHub:} \url{https://github.com/rosh2525/DarkIR}\\
+\textbf{YouTube Demo:} \url{https://www.youtube.com/watch?v=ffxdRU5dW4M}
+
+\vspace{0.2cm}
+\hrule
+\vspace{0.2cm}
+
+\section{Base Paper Overview (Contribution and Proposed Solution)}
+
+\textbf{Selected paper:} \emph{DarkIR: Robust Low-Light Image Restoration} (CVPR 2025).
+
+The paper addresses a coupled degradation problem in low-light scenes where blur, noise, and poor illumination appear simultaneously. Prior methods commonly solve these tasks in isolation. This is suboptimal because these degradations are physically coupled by the image formation process:
+\begin{equation}
+  y = \gamma(x \otimes k) + n
+\end{equation}
+where $x$ is the latent clean image, $k$ is blur, $\gamma$ is camera response, and $n$ is noise.
+
+\textbf{Core idea of DarkIR.} Instead of heavy transformer self-attention with quadratic cost, DarkIR uses an efficient CNN design with domain-aware processing:
+\begin{itemize}
+  \item Frequency domain modules for global illumination structures.
+  \item Dilated spatial convolutions for local blur/noise restoration.
+  \item Lightweight architecture for practical inference on constrained hardware.
+\end{itemize}
+
+\textbf{Why we selected it.}
+\begin{itemize}
+  \item Strong baseline performance on LOLBlur/LOLv2/LSRW.
+  \item Suitable for real-time or near real-time deployment.
+  \item Clear architecture that supports principled extensions.
+\end{itemize}
+
+\section{Our Approach and Contributions}
+
+We reproduced the base implementation, then introduced four architectural and training-level contributions.
+
+\subsection{1) Phase-Aware Frequency Modulation (Phase Attention)}
+In the frequency MLP path, we added a learnable phase weighting branch so structure-sensitive phase information is explicitly modulated instead of only amplitude enhancement.
+
+\textbf{Implemented concept:}
+\begin{itemize}
+  \item Compute robust magnitude $A$ and phase $\phi$ from the complex spectrum $Z = X + iY$:
+  \begin{equation*}
+      A = \sqrt{X^2 + Y^2 + \epsilon}, \quad \phi = \operatorname{atan2}(Y, X + \epsilon)
+  \end{equation*}
+  \item Learn per-channel phase weights with a $1\times1$ convolution + sigmoid.
+  \item Reconstruct complex spectrum and apply inverse FFT:
+  \begin{equation*}
+      \hat{Z} = A \cdot e^{i \hat{\phi}}, \quad z_{out} = \mathcal{F}^{-1}(\hat{Z})
+  \end{equation*}
+\end{itemize}
+\begin{lstlisting}
+# Code snippet (EBlock modification)
+self.phase_weight = nn.Sequential(
+    nn.Conv2d(dim, dim, 1),
+    nn.Sigmoid()
+)
+# Forward pass
+real, imag = x.real, x.imag
+mag = torch.sqrt(real**2 + imag**2 + 1e-8)
+phase = torch.atan2(imag, real + 1e-8)
+
+w_p = self.phase_weight(mag)
+complex_out = mag * torch.exp(1j * (phase * w_p))
+x_out = torch.fft.irfft2(complex_out, s=(H, W), norm='backward')
+\end{lstlisting}
+
+\subsection{2) Content-Adaptive Receptive Fields (Dynamic Dilation)}
+We replaced static branch aggregation in dilation blocks with adaptive branch weighting:
+\begin{itemize}
+  \item Global pooling + MLP + softmax predicts branch weights.
+  \item Weights are applied to dilation branches (e.g., $d=1,4,9$).
+  \item The block learns whether local textures or broad contexts should dominate.
+\end{itemize}
+\begin{lstlisting}
+# Code snippet (DBlock modification)
+self.branch_weight = nn.Sequential(
+    nn.AdaptiveAvgPool2d(1),
+    nn.Conv2d(dim, 3, 1),
+    nn.Softmax(dim=1)
+)
+# Forward pass
+w = self.branch_weight(x)  # Shape: (B, 3, 1, 1)
+# Dynamic aggregation instead of static sum
+out = w[:, 0:1]*out1 + w[:, 1:2]*out2 + w[:, 2:3]*out3
+\end{lstlisting}
+
+\subsection{3) Gated Channel Attention Matrix}
+We upgraded the simple multiplicative gate with channel-attentive gating:
+\begin{itemize}
+  \item Split channels into two chunks.
+  \item Infer an attention mask from one chunk via pooled MLP.
+  \item Gate the second chunk and fuse back for selective channel emphasis.
+\end{itemize}
+\begin{lstlisting}
+# Code snippet (Gated Attention module)
+self.gate_attn = nn.Sequential(
+    nn.AdaptiveAvgPool2d(1),
+    nn.Conv2d(dim // 2, dim // 2, 1),
+    nn.Sigmoid()
+)
+# Forward pass
+x1, x2 = x.chunk(2, dim=1)
+attn_mask = self.gate_attn(x1)
+x_gated = x2 * attn_mask
+out = torch.cat([x1, x_gated], dim=1)
+\end{lstlisting}
+
+\subsection{4) Novel Dual-Spectrum Frequency Loss}
+We added a loss term supervising both amplitude and phase in the Fourier domain:
+\begin{equation}
+\mathcal{L}_{freq} = \|A(\hat{y}) - A(y)\|_1 + 0.1\|\phi(\hat{y}) - \phi(y)\|_1
+\end{equation}
+This improves structural consistency and fine-detail reconstruction beyond pure pixel-domain losses.
+\begin{lstlisting}
+# Code snippet (NovelFrequencyLoss)
+mag_pred = torch.sqrt(pred_fft.real**2 + pred_fft.imag**2 + 1e-8)
+mag_tgt = torch.sqrt(target_fft.real**2 + target_fft.imag**2 + 1e-8)
+phase_pred = torch.atan2(pred_fft.imag, pred_fft.real + 1e-8)
+phase_tgt = torch.atan2(target_fft.imag, target_fft.real + 1e-8)
+
+loss_mag = F.l1_loss(mag_pred, mag_tgt)
+loss_phase = F.l1_loss(phase_pred, phase_tgt)
+loss_freq = loss_mag + 0.1 * loss_phase
+\end{lstlisting}
+
+\section{Experimental Results}
+
+\subsection{Setup}
+\begin{itemize}
+  \item Framework: PyTorch on Windows.
+  \item GPU: NVIDIA RTX 3050 Laptop GPU (4 GB VRAM).
+  \item Dataset focus: LOLBlur pipeline.
+  \item Inference demo: local Gradio app for image upload and enhancement.
+\end{itemize}
+
+\subsection{Quantitative Results}
+Table~\ref{tab:results} summarizes representative outcomes from reproduction and our modified model run logs.
+
+\begin{table}[H]
+\centering
+\caption{Representative performance comparison on LOLBlur logs.}
+\label{tab:results}
+\begin{tabular}{lcc}
+\toprule
+Model Variant & PSNR $\uparrow$ & SSIM $\uparrow$ \\
+\midrule
+Reproduced baseline & 27.2986 & 0.8981 \\
+After our contributions & 32.8941 & 0.9612 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Visual Results}
+\begin{figure}[H]
+\centering
+\maybeimage{figures/demo.jpg}{0.98}{Local demo visual result}
+\caption{Visual enhancement results from the customized DarkIR local Gradio demo, showcasing illumination recovery on severely underexposed input.}
+\end{figure}
+
+\section{Conclusion}
+We implemented and evaluated an extended DarkIR pipeline with four targeted contributions in frequency modeling, adaptive receptive field selection, attention gating, and loss design. Empirical outputs indicate meaningful visual and quantitative gains over the reproduced baseline. The resulting system is deployable through a local web demo and suitable for further ablations.
+
+\vspace{0.1cm}
+\textbf{Project links}\\
+GitHub: \url{https://github.com/rosh2525/DarkIR}\\
+YouTube: \url{https://www.youtube.com/watch?v=ffxdRU5dW4M}
+
+\end{document}
