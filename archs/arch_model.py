@@ -10,8 +10,27 @@ except:
 
 
 class SimpleGate(nn.Module):
+    def __init__(self, channels=None):
+        super().__init__()
+        # If channels is provided, use Gated Attention (Change 4)
+        if channels is not None:
+            self.channel_attn = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                nn.Flatten(),
+                nn.Linear(channels // 2, channels // 8),
+                nn.ReLU(),
+                nn.Linear(channels // 8, channels // 2),
+                nn.Sigmoid()
+            )
+        else:
+            self.channel_attn = None
+
     def forward(self, x):
         x1, x2 = x.chunk(2, dim=1)
+        if self.channel_attn is not None:
+            attn = self.channel_attn(x2)
+            attn = attn.view(attn.shape[0], -1, 1, 1)
+            return x1 * (x2 * attn)
         return x1 * x2
 
 class Adapter(nn.Module):
@@ -41,17 +60,35 @@ class FreMLP(nn.Module):
             nn.Conv2d(nc, expand * nc, 1, 1, 0),
             nn.LeakyReLU(0.1, inplace=True),
             nn.Conv2d(expand * nc, nc, 1, 1, 0))
+        
+        # Change 1: Phase Attention Layer
+        self.phase_conv = nn.Conv2d(nc, nc, 1, 1, 0)
 
     def forward(self, x):
         _, _, H, W = x.shape
-        x_freq = torch.fft.rfft2(x, norm='backward')
-        mag = torch.abs(x_freq)
-        pha = torch.angle(x_freq)
+        x_freq = torch.fft.rfft2(x.float(), norm='backward')
+        
+        # Robust amplitude and phase calculation to prevent NaN gradients!
+        real = x_freq.real
+        imag = x_freq.imag
+        mag = torch.sqrt(real**2 + imag**2 + 1e-8)
+        pha = torch.atan2(imag, real + 1e-8)
+        
+        # Enhance amplitude
         mag = self.process1(mag)
+        mag = torch.nan_to_num(mag, nan=0.0, posinf=1e4, neginf=0.0)
+        mag = torch.clamp(mag, min=0.0, max=1e4)
+        
+        # Change 1: Enhance phase with attention
+        phase_weight = torch.sigmoid(self.phase_conv(pha))
+        phase_weight = torch.nan_to_num(phase_weight, nan=0.5, posinf=1.0, neginf=0.0)
+        pha = pha * phase_weight
+        
         real = mag * torch.cos(pha)
         imag = mag * torch.sin(pha)
         x_out = torch.complex(real, imag)
         x_out = torch.fft.irfft2(x_out, s=(H, W), norm='backward')
+        x_out = torch.nan_to_num(x_out, nan=0.0, posinf=1e4, neginf=-1e4)
         return x_out
 
 class Branch(nn.Module):
@@ -85,6 +122,14 @@ class DBlock(nn.Module):
         for dilation in dilations:
             self.branches.append(Branch(self.dw_channel, DW_Expand = 1, dilation = dilation))
             
+        # Change 2: Adaptive Dilation Rates
+        self.rate_weights = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(self.dw_channel, len(dilations)),
+            nn.Softmax(dim=1)
+        )
+            
         assert len(dilations) == len(self.branches)
         self.dw_channel = DW_Expand * c 
         self.sca = nn.Sequential(
@@ -92,8 +137,8 @@ class DBlock(nn.Module):
                        nn.Conv2d(in_channels=self.dw_channel // 2, out_channels=self.dw_channel // 2, kernel_size=1, padding=0, stride=1,
                        groups=1, bias=True, dilation = 1),  
         )
-        self.sg1 = SimpleGate()
-        self.sg2 = SimpleGate()
+        self.sg1 = SimpleGate(self.dw_channel) # Change 4: Gated Attention
+        self.sg2 = SimpleGate(FFN_Expand * c) # Change 4: Gated Attention
         self.conv3 = nn.Conv2d(in_channels=self.dw_channel // 2, out_channels=c, kernel_size=1, padding=0, stride=1, groups=1, bias=True, dilation = 1)
         ffn_channel = FFN_Expand * c
         self.conv4 = nn.Conv2d(in_channels=c, out_channels=ffn_channel, kernel_size=1, padding=0, stride=1, groups=1, bias=True)
@@ -119,9 +164,14 @@ class DBlock(nn.Module):
         x = self.norm1(inp)
         # x = self.conv1(self.extra_conv(x))
         x = self.extra_conv(self.conv1(x))
+        
+        # Change 2: Apply adaptive dilation weights
+        w = self.rate_weights(x)
+        
         z = 0
-        for branch in self.branches:
-            z += branch(x)
+        for i, branch in enumerate(self.branches):
+            w_i = w[:, i:i+1, None, None]
+            z += w_i * branch(x)
         
         z = self.sg1(z)
         x = self.sca(z) * z
@@ -154,6 +204,14 @@ class EBlock(nn.Module):
         for dilation in dilations:
             self.branches.append(Branch(c, DW_Expand, dilation = dilation))
             
+        # Change 2: Adaptive Dilation Rates
+        self.rate_weights = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(self.dw_channel, len(dilations)),
+            nn.Softmax(dim=1)
+        )
+            
         assert len(dilations) == len(self.branches)
         self.dw_channel = DW_Expand * c 
         self.sca = nn.Sequential(
@@ -161,7 +219,7 @@ class EBlock(nn.Module):
                        nn.Conv2d(in_channels=self.dw_channel // 2, out_channels=self.dw_channel // 2, kernel_size=1, padding=0, stride=1,
                        groups=1, bias=True, dilation = 1),  
         )
-        self.sg1 = SimpleGate()
+        self.sg1 = SimpleGate(self.dw_channel) # Change 4: Gated Attention
         self.conv3 = nn.Conv2d(in_channels=self.dw_channel // 2, out_channels=c, kernel_size=1, padding=0, stride=1, groups=1, bias=True, dilation = 1)
         # second step
 
@@ -183,9 +241,14 @@ class EBlock(nn.Module):
         y = inp
         x = self.norm1(inp)
         x = self.conv1(self.extra_conv(x))
+        
+        # Change 2: Apply adaptive dilation weights
+        w = self.rate_weights(x)
+        
         z = 0
-        for branch in self.branches:
-            z += branch(x)
+        for i, branch in enumerate(self.branches):
+            w_i = w[:, i:i+1, None, None]
+            z += w_i * branch(x)
         
         z = self.sg1(z)
         x = self.sca(z) * z
