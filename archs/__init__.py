@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from ptflops import get_model_complexity_info
@@ -24,17 +25,19 @@ def create_model(opt, rank, adapter = False):
 
     if rank ==0:
         print(f'Using {name} network')
-
-        input_size = (3, 256, 256)
-        macs, params = get_model_complexity_info(model, input_size, print_per_layer_stat = False)
-        print(f'Computational complexity at {input_size}: {macs}')
-        print('Number of parameters: ', params)    
+        macs, params = None, None
     else:
         macs, params = None, None
 
-    model.to(rank)
-    
-    model = DDP(model, device_ids=[rank], find_unused_parameters=adapter)
+    if torch.cuda.is_available():
+        device = torch.device(f'cuda:{rank}')
+        model.to(device)
+        if dist.is_available() and dist.is_initialized():
+            model = DDP(model, device_ids=[rank], find_unused_parameters=adapter)
+    else:
+        model.to('cpu')
+        if dist.is_available() and dist.is_initialized():
+            model = DDP(model, find_unused_parameters=adapter)
     
     return model, macs, params
 
