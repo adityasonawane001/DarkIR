@@ -135,7 +135,7 @@ Representative outcomes from model run iterations and validation exports show di
 | Model Variant | PSNR &uarr; | SSIM &uarr; |
 | :--- | :---: | :---: |
 | Reproduced baseline | 27.2986 | 0.8981 |
-| **After our contributions** | **32.8941** | **0.9612** |
+| **After our contributions** | **28.4562** | **0.8683** |
 
 ### Visual Demonstrations
 Our deployed local inference script cleanly operates on completely blacked-out inputs while managing CUDA VRAM loads reliably.
