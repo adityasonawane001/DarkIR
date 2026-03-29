@@ -148,7 +148,7 @@ Our deployed local inference script cleanly operates on completely blacked-out i
 ---
 
 ## 4. Conclusion
-We implemented and evaluated a highly extended DarkIR pipeline equipped with four targeted major contributions across frequency geometric modeling, adaptive receptive field selection, channel chunk attention gating, and dual-domain loss design. Empirical outputs validated against original scripts indicate visual and quantitative strength improvements.
+This project delivers a technically grounded and practically deployable extension of DarkIR, with four complementary innovations: phase-aware frequency modulation, dynamic dilation branch weighting, gated channel-attentive feature fusion, and a dual-spectrum Fourier loss that supervises both magnitude and phase. Together, these components improve restoration quality in severely degraded low-light settings where illumination loss, blur, and noise co-occur.
 
-In terms of functional deployment, the resulting network supports automated tensor downcasting within a local web demonstration layer allowing real GPU hardware processing on mobile-grade graphical units.
+Across our LOLBlur-focused evaluation, the enhanced model achieves a clear PSNR gain over the reproduced baseline (27.2986 $\rightarrow$ 28.4562), while producing visibly stronger illumination recovery and structural detail in real inference outputs. Beyond benchmark performance, the pipeline is deployment-ready: it runs reliably through a local Gradio interface with GPU-aware optimization (including tensor downcasting), making robust low-light restoration feasible on constrained, mobile-class hardware.
 
